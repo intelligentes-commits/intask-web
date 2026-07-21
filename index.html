@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a84ff">
+<title>intask</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root{
+    --bg:#f6f5f1; --card:#ffffff; --ink:#1c1d21; --muted:#6b6d76; --faint:#9a9ca4;
+    --accent:#0a84ff; --sep:#e7e6e1; --danger:#e5484d; --done:#8a8c94;
+    --radius:14px; --pad:16px;
+    --safe-top:env(safe-area-inset-top); --safe-bot:env(safe-area-inset-bottom);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#111318; --card:#1a1d24; --ink:#e9eaee; --muted:#9a9ca4; --faint:#6b6d76;
+           --accent:#3aa0ff; --sep:#262a33; --done:#6b6d76; }
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; }
+  body{
+    background:var(--bg); color:var(--ink); font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    letter-spacing:-0.01em; -webkit-font-smoothing:antialiased;
+  }
+  button{ font:inherit; color:inherit; border:none; background:none; cursor:pointer; }
+  input{ font:inherit; color:inherit; }
+  .hidden{ display:none !important; }
+
+  /* --- Connect screen --- */
+  #connect{ max-width:440px; margin:0 auto; padding:calc(var(--safe-top) + 40px) var(--pad) var(--pad); }
+  #connect h1{ font-size:28px; font-weight:700; letter-spacing:-0.03em; margin:0 0 4px; }
+  #connect p{ color:var(--muted); margin:0 0 24px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .field input{
+    width:100%; padding:12px 14px; background:var(--card); border:1px solid var(--sep);
+    border-radius:12px; outline:none;
+  }
+  .field input:focus{ border-color:var(--accent); }
+  .btn{
+    width:100%; padding:13px; background:var(--accent); color:#fff; border-radius:12px;
+    font-weight:600; margin-top:8px;
+  }
+  .btn.ghost{ background:transparent; color:var(--accent); border:1px solid var(--sep); }
+  .hint{ font-size:12px; color:var(--faint); margin-top:16px; line-height:1.5; }
+  .hint a{ color:var(--accent); }
+  .err{ color:var(--danger); font-size:13px; margin-top:10px; min-height:18px; }
+
+  /* --- App --- */
+  #app{ max-width:640px; margin:0 auto; padding-bottom:calc(var(--safe-bot) + 96px); }
+  header.top{
+    position:sticky; top:0; background:var(--bg); z-index:5;
+    padding:calc(var(--safe-top) + 12px) var(--pad) 10px;
+    display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--sep);
+  }
+  header.top .logo{ width:26px;height:26px;border-radius:8px;background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700; }
+  header.top .title{ font-weight:700; font-size:19px; letter-spacing:-0.02em; flex:1; }
+  header.top .cnt{ color:var(--faint); font-weight:600; font-size:15px; }
+  header.top button.icon{ color:var(--muted); font-size:18px; padding:6px; }
+
+  .lists{ display:flex; gap:8px; overflow-x:auto; padding:10px var(--pad); scrollbar-width:none; }
+  .lists::-webkit-scrollbar{ display:none; }
+  .chip{ white-space:nowrap; padding:7px 14px; border-radius:999px; background:var(--card);
+    border:1px solid var(--sep); color:var(--muted); font-size:14px; font-weight:500; }
+  .chip.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+
+  ul.tasks{ list-style:none; margin:0; padding:6px var(--pad) 0; }
+  li.task{ display:flex; align-items:center; gap:6px; padding:8px 4px;
+    border-bottom:1px solid var(--sep); }
+  /* 40px тап-цель, кружок 22px внутри (комфортно для пальца) */
+  li.task .box{ flex:0 0 auto; width:40px;height:40px; display:flex; align-items:center;
+    justify-content:center; position:relative; }
+  li.task .box::before{ content:""; width:22px;height:22px;border-radius:50%;
+    border:2px solid var(--faint); transition:.15s; }
+  li.task.done .box::before{ background:var(--accent); border-color:var(--accent); }
+  li.task.done .box::after{ content:"✓"; position:absolute; color:#fff; font-size:13px; }
+  li.task .t{ flex:1; min-width:0; padding:5px 0; }
+  li.task .name{ word-break:break-word; }
+  li.task.done .name{ color:var(--done); text-decoration:line-through; }
+  li.task .meta{ font-size:12px; color:var(--faint); margin-top:2px; display:flex; gap:10px; }
+  li.task .meta .flag{ color:var(--accent); }
+  li.task .meta .prio{ color:var(--danger); font-weight:700; }
+  .sec{ padding:18px var(--pad) 4px; font-size:12px; font-weight:700; letter-spacing:0.06em;
+    color:var(--faint); text-transform:uppercase; }
+  .empty{ text-align:center; color:var(--faint); padding:60px var(--pad); }
+
+  /* Add bar */
+  .addbar{ position:fixed; left:0; right:0; bottom:0; background:var(--bg);
+    padding:10px var(--pad) calc(var(--safe-bot) + 10px); border-top:1px solid var(--sep);
+    display:flex; gap:10px; max-width:640px; margin:0 auto; }
+  .addbar input{ flex:1; padding:12px 14px; background:var(--card); border:1px solid var(--sep);
+    border-radius:999px; outline:none; }
+  .addbar input:focus{ border-color:var(--accent); }
+  .addbar button{ width:44px; height:44px; border-radius:50%; background:var(--accent); color:#fff;
+    font-size:22px; flex:0 0 auto; }
+  .addbar button:disabled{ opacity:.4; }
+
+  .toast{ position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
+    background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:999px; font-size:14px;
+    opacity:0; transition:.2s; pointer-events:none; z-index:20; max-width:90%; }
+  .toast.show{ opacity:.95; }
+  .spinner{ text-align:center; color:var(--faint); padding:40px; }
+</style>
+</head>
+<body>
+
+<!-- Экран подключения -->
+<section id="connect">
+  <h1>intask</h1>
+  <p>Задачи из твоего приватного GitHub-репозитория.</p>
+  <div class="field"><label>Владелец/репозиторий (owner/repo)</label>
+    <input id="in-repo" placeholder="username/reminders" autocapitalize="off" autocorrect="off"></div>
+  <div class="field"><label>Ветка</label>
+    <input id="in-branch" placeholder="main" value="main" autocapitalize="off"></div>
+  <div class="field"><label>Personal Access Token (repo scope)</label>
+    <input id="in-token" type="password" placeholder="ghp_…" autocapitalize="off" autocorrect="off"></div>
+  <button class="btn" id="btn-connect">Подключиться</button>
+  <button class="btn ghost" id="btn-demo">Демо (без токена)</button>
+  <div class="err" id="connect-err"></div>
+  <div class="hint">
+    Токен хранится только в этом браузере (localStorage) и уходит напрямую в GitHub API.
+    Создать: GitHub → Settings → Developer settings → Fine-grained token с доступом
+    Contents (read/write) к репозиторию.
+  </div>
+</section>
+
+<!-- Приложение -->
+<section id="app" class="hidden">
+  <header class="top">
+    <div class="logo">✓</div>
+    <div class="title" id="app-title">Входящие</div>
+    <div class="cnt" id="app-count"></div>
+    <button class="icon" id="btn-refresh" title="Обновить">⟳</button>
+    <button class="icon" id="btn-logout" title="Выйти">⎋</button>
+  </header>
+  <div class="lists" id="lists"></div>
+  <div id="list-body"></div>
+</section>
+
+<div class="addbar hidden" id="addbar">
+  <input id="add-input" placeholder="Новая задача" enterkeyhint="done">
+  <button id="add-btn" disabled>＋</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+// ===========================================================================
+// intask web (PWA) — читает/пишет тот же формат, что Windows-клиент:
+// файл-имя = [~]{хэши родителей}_{свой хэш}_{название}.toml, ~ = выполнено,
+// _-префикс = служебный. GitHub-репо = хаб синхронизации.
+// ===========================================================================
+
+const LS = "intask.cfg";
+let cfg = null;         // {repo, branch, token}  (token отсутствует в demo)
+let demo = false;
+let model = null;       // {lists:[{name,path,order,tasks:[...]}], curList}
+let mock = null;        // demo-данные (изменяемые в памяти)
+
+const $ = s => document.querySelector(s);
+const el = (t, c, txt) => { const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e; };
+const toast = (m) => { const t=$("#toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),1800); };
+
+// --- Разбор имени файла задачи ---
+function parseTaskFilename(fname){
+  if(!fname.endsWith(".toml")) return null;
+  let name = fname.slice(0, -5);
+  if(name.startsWith("_")) return null;         // служебный файл
+  let done = false;
+  if(name.startsWith("~")){ done = true; name = name.slice(1); }
+  const toks = name.split("_");
+  const hashes = [];
+  let i = 0;
+  while(i < toks.length && /^[0-9a-f]{6}$/.test(toks[i])){ hashes.push(toks[i]); i++; }
+  if(hashes.length === 0) return null;
+  const title = toks.slice(i).join("_");
+  return { done, parents: hashes.slice(0,-1), hash: hashes[hashes.length-1], title };
+}
+
+// --- Разбор полей TOML (по мере необходимости) ---
+function parseTaskToml(text){
+  const out = { due:null, priority:0, flagged:false };
+  if(!text) return out;
+  for(const raw of text.split(/\r?\n/)){
+    const line = raw.trim();
+    if(line.startsWith("[")) break;             // [[comment]] и т.п.
+    const eq = line.indexOf("=");
+    if(eq < 0) continue;
+    const k = line.slice(0,eq).trim(), v = line.slice(eq+1).trim().replace(/^"|"$/g,"");
+    if(k==="due") out.due = v || null;
+    else if(k==="priority") out.priority = parseInt(v)||0;
+    else if(k==="flagged") out.flagged = v==="true";
+  }
+  return out;
+}
+
+// --- Массив в _list.toml: order = ["a1b2c3", ...] ---
+function parseStringArray(text, key){
+  if(!text) return [];
+  const m = text.match(new RegExp("^\\s*"+key+"\\s*=\\s*\\[([^\\]]*)\\]","m"));
+  if(!m) return [];
+  return [...m[1].matchAll(/"([^"]*)"/g)].map(x=>x[1]);
+}
+
+// --- Уникальный 6-hex хэш (как в ядре: от времени создания) ---
+function newHash(existing){
+  let seed = Math.floor(Date.now()/1000) & 0xFFFFFF;
+  for(let a=0;a<4096;a++){
+    const h = ((seed+a)&0xFFFFFF).toString(16).padStart(6,"0");
+    if(!existing.has(h)) return h;
+  }
+  return Math.random().toString(16).slice(2,8);
+}
+function sanitizeTitle(t){
+  return t.replace(/[\\\/:*?"<>|]/g,"-").replace(/\s+/g," ").trim().slice(0,120);
+}
+
+// ===========================================================================
+// GitHub API
+// ===========================================================================
+async function gh(path, opts={}){
+  const r = await fetch("https://api.github.com"+path, {
+    ...opts,
+    headers:{ "Authorization":"Bearer "+cfg.token, "Accept":"application/vnd.github+json",
+              "X-GitHub-Api-Version":"2022-11-28", ...(opts.headers||{}) }
+  });
+  if(!r.ok){ const b=await r.text(); throw new Error("GitHub "+r.status+": "+b.slice(0,140)); }
+  return r.status===204 ? null : r.json();
+}
+const b64encode = s => btoa(unescape(encodeURIComponent(s)));
+const b64decode = s => decodeURIComponent(escape(atob(s.replace(/\n/g,""))));
+
+async function ghTree(){
+  const d = await gh(`/repos/${cfg.repo}/git/trees/${encodeURIComponent(cfg.branch)}?recursive=1`);
+  return d.tree || [];
+}
+async function ghGet(path){
+  const d = await gh(`/repos/${cfg.repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(cfg.branch)}`);
+  return { text:b64decode(d.content), sha:d.sha };
+}
+async function ghPut(path, text, sha, msg){
+  const body = { message:msg, content:b64encode(text), branch:cfg.branch };
+  if(sha) body.sha = sha;
+  return gh(`/repos/${cfg.repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}`,
+            { method:"PUT", body:JSON.stringify(body) });
+}
+async function ghDel(path, sha, msg){
+  return gh(`/repos/${cfg.repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}`,
+            { method:"DELETE", body:JSON.stringify({ message:msg, sha, branch:cfg.branch }) });
+}
+
+// ===========================================================================
+// Загрузка модели (Входящие = корень; поддиректория с _list.toml = список)
+// ===========================================================================
+async function loadModel(){
+  showSpinner();
+  let files;                 // [{path, name, dir, sha?}]
+  let orderTexts = {};       // dir -> _list.toml text
+  if(demo){
+    files = mock.files.map(f=>({ path:f.path, name:f.path.split("/").pop(), dir:dirOf(f.path) }));
+    for(const f of mock.files) if(f.path.endsWith("_list.toml")) orderTexts[dirOf(f.path)] = f.text;
+  } else {
+    const tree = await ghTree();
+    files = tree.filter(t=>t.type==="blob" && t.path.endsWith(".toml"))
+                .map(t=>({ path:t.path, name:t.path.split("/").pop(), dir:dirOf(t.path), sha:t.sha }));
+    // _list.toml тексты нужны для order — тянем их (обычно немного).
+    for(const f of files.filter(f=>f.name==="_list.toml")){
+      try{ orderTexts[f.dir] = (await ghGet(f.path)).text; }catch(e){}
+    }
+  }
+  // Сгруппировать по каталогу-списку. Корень "" = Входящие.
+  const listDirs = new Set([""]);
+  for(const f of files) if(f.name==="_list.toml") listDirs.add(f.dir);
+  const lists = [...listDirs].map(dir=>{
+    const name = dir==="" ? "Входящие" : dir.split("/").pop();
+    const order = parseStringArray(orderTexts[dir]||"", "order");
+    const tasks = [];
+    for(const f of files){
+      if(f.dir!==dir || f.name.startsWith("_")) continue;
+      const p = parseTaskFilename(f.name);
+      if(!p || p.parents.length>0) continue;   // v1: только верхний уровень списка
+      tasks.push({ ...p, path:f.path, sha:f.sha });
+    }
+    // Сортировка по order (хэш), незнакомые — в хвост, выполненные — вниз.
+    tasks.sort((a,b)=>{
+      if(a.done!==b.done) return a.done?1:-1;
+      const ia=order.indexOf(a.hash), ib=order.indexOf(b.hash);
+      return (ia<0?1e9:ia)-(ib<0?1e9:ib);
+    });
+    return { name, dir, order, tasks };
+  }).sort((a,b)=> a.dir==="" ? -1 : b.dir==="" ? 1 : a.name.localeCompare(b.name));
+
+  model = { lists, curList:0 };
+  render();
+}
+function dirOf(path){ const i=path.lastIndexOf("/"); return i<0?"":path.slice(0,i); }
+
+// ===========================================================================
+// Рендер
+// ===========================================================================
+function showSpinner(){ $("#list-body").innerHTML=""; const s=el("div","spinner","Загрузка…"); $("#list-body").appendChild(s); }
+
+function render(){
+  const L = model.lists[model.curList];
+  $("#app-title").textContent = L.name;
+  const active = L.tasks.filter(t=>!t.done), done = L.tasks.filter(t=>t.done);
+  $("#app-count").textContent = active.length;
+
+  // Чипы списков
+  const chips = $("#lists"); chips.innerHTML="";
+  model.lists.forEach((l,idx)=>{
+    const c = el("button","chip"+(idx===model.curList?" active":""), l.name);
+    c.onclick = ()=>{ model.curList=idx; render(); };
+    chips.appendChild(c);
+  });
+
+  const body = $("#list-body"); body.innerHTML="";
+  if(L.tasks.length===0){ body.appendChild(el("div","empty","Нет задач")); return; }
+  const ul = el("ul","tasks");
+  active.forEach(t=>ul.appendChild(taskRow(t)));
+  body.appendChild(ul);
+  if(done.length){
+    body.appendChild(el("div","sec","Выполнено"));
+    const ud = el("ul","tasks");
+    done.forEach(t=>ud.appendChild(taskRow(t)));
+    body.appendChild(ud);
+  }
+}
+
+function taskRow(t){
+  const li = el("li","task"+(t.done?" done":""));
+  const box = el("button","box"); box.onclick=()=>toggleDone(t);
+  const wrap = el("div","t");
+  wrap.appendChild(el("div","name", t.title));
+  if(t.meta){
+    const m = el("div","meta");
+    if(t.meta.flagged) m.appendChild(el("span","flag","⚑"));
+    if(t.meta.priority) m.appendChild(el("span","prio","!".repeat(t.meta.priority)));
+    if(t.meta.due) m.appendChild(el("span","due", t.meta.due));
+    if(m.children.length) wrap.appendChild(m);
+  }
+  li.appendChild(box); li.appendChild(wrap);
+  return li;
+}
+
+// ===========================================================================
+// Действия: выполнить/снять (переименование ~) и добавить задачу
+// ===========================================================================
+async function toggleDone(t){
+  const L = model.lists[model.curList];
+  const base = t.path.slice(0, t.path.length - (t.path.split("/").pop().length)); // dir + "/"
+  const oldName = t.path.split("/").pop();
+  const newName = t.done ? oldName.replace(/^~/,"") : "~"+oldName;
+  const newPath = base + newName;
+  t.done = !t.done; render();  // оптимистично
+  try{
+    if(demo){
+      const f = mock.files.find(f=>f.path===t.path); f.path=newPath; t.path=newPath;
+    } else {
+      const cur = await ghGet(t.path);
+      await ghPut(newPath, cur.text, null, (t.done?"Done: ":"Undone: ")+t.title);
+      await ghDel(t.path, cur.sha, "move "+oldName);
+      t.path=newPath; t.sha=undefined;
+    }
+  }catch(e){ t.done=!t.done; render(); toast("Ошибка: "+e.message); }
+}
+
+async function addTask(title){
+  title = sanitizeTitle(title);
+  if(!title) return;
+  const L = model.lists[model.curList];
+  const existing = new Set(L.tasks.map(t=>t.hash));
+  const hash = newHash(existing);
+  const fname = `${hash}_${title}.toml`;
+  const path = (L.dir? L.dir+"/":"") + fname;
+  const task = { done:false, parents:[], hash, title, path };
+  L.tasks.unshift(task); render();   // оптимистично
+  try{
+    if(demo){ mock.files.push({ path, text:"" }); }
+    else { await ghPut(path, "", null, "Add: "+title); }
+    toast("Добавлено");
+  }catch(e){ const i=L.tasks.indexOf(task); if(i>=0)L.tasks.splice(i,1); render(); toast("Ошибка: "+e.message); }
+}
+
+// ===========================================================================
+// Подключение / demo / роутинг
+// ===========================================================================
+function showApp(){
+  $("#connect").classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  $("#addbar").classList.remove("hidden");
+}
+function showConnect(){
+  $("#connect").classList.remove("hidden");
+  $("#app").classList.add("hidden");
+  $("#addbar").classList.add("hidden");
+}
+
+async function connect(){
+  const repo = $("#in-repo").value.trim();
+  const branch = $("#in-branch").value.trim() || "main";
+  const token = $("#in-token").value.trim();
+  if(!repo || !token){ $("#connect-err").textContent="Заполни репозиторий и токен."; return; }
+  cfg = { repo, branch, token }; demo=false;
+  try{
+    await gh(`/repos/${repo}`);           // проверка доступа
+    localStorage.setItem(LS, JSON.stringify(cfg));
+    showApp(); await loadModel();
+  }catch(e){ $("#connect-err").textContent = "Не удалось: "+e.message; cfg=null; }
+}
+
+function startDemo(){
+  demo=true; cfg={ repo:"demo/demo", branch:"main" };
+  mock = { files:[
+    { path:"_list.toml", text:'order = ["a10001","a10002","a10003"]\n' },
+    { path:"a10001_Купить хлеб.toml", text:"priority = 2\nflagged = true\n" },
+    { path:"a10002_Позвонить врачу.toml", text:'due = 2026-07-25\n' },
+    { path:"~a10003_Оплатить счёт.toml", text:"" },
+    { path:"Работа/_list.toml", text:'order = ["b20001","b20002"]\n' },
+    { path:"Работа/b20001_Отчёт за квартал.toml", text:"priority = 3\n" },
+    { path:"Работа/b20002_Ревью PR.toml", text:"" },
+  ]};
+  showApp(); loadModel();
+}
+
+function logout(){ localStorage.removeItem(LS); cfg=null; demo=false; model=null; showConnect(); }
+
+// События
+$("#btn-connect").onclick = connect;
+$("#btn-demo").onclick = startDemo;
+$("#btn-refresh").onclick = ()=> loadModel().catch(e=>toast(e.message));
+$("#btn-logout").onclick = logout;
+const addIn = $("#add-input"), addBtn = $("#add-btn");
+addIn.addEventListener("input", ()=> addBtn.disabled = !addIn.value.trim());
+addBtn.onclick = ()=>{ const v=addIn.value; addIn.value=""; addBtn.disabled=true; addTask(v); };
+addIn.addEventListener("keydown", e=>{ if(e.key==="Enter" && addIn.value.trim()){ const v=addIn.value; addIn.value=""; addBtn.disabled=true; addTask(v); } });
+
+// Автовосстановление сессии
+(function init(){
+  const saved = localStorage.getItem(LS);
+  if(saved){ try{ cfg=JSON.parse(saved); if(cfg.token){ showApp(); loadModel().catch(e=>{ toast(e.message); showConnect(); }); return; } }catch(e){} }
+  showConnect();
+})();
+
+// Service worker (офлайн-оболочка) — регистрируется, если файл есть.
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+</script>
+</body>
+</html>
