@@ -409,7 +409,13 @@ async function connect(){
     await gh(`/repos/${repo}`);           // проверка доступа
     localStorage.setItem(LS, JSON.stringify(cfg));
     showApp(); await loadModel();
-  }catch(e){ $("#connect-err").textContent = "Не удалось: "+e.message; cfg=null; }
+  }catch(e){
+    let msg = e.message;
+    if(/GitHub 401/.test(msg)) msg = "Неверный или просроченный токен.";
+    else if(/GitHub 403/.test(msg)) msg = "Токену не хватает прав: нужен доступ Contents (read/write) именно к этому репозиторию.";
+    else if(/GitHub 404/.test(msg)) msg = "Репозиторий не найден. Проверь строку owner/repo и что токен создан в аккаунте-владельце репо.";
+    $("#connect-err").textContent = msg; cfg=null;
+  }
 }
 
 function startDemo(){
