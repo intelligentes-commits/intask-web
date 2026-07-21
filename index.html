@@ -4,8 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a84ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="intask">
 <title>intask</title>
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230a84ff'/%3E%3Cpath d='M52 94l26 26 50-60' fill='none' stroke='white' stroke-width='15' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#f6f5f1; --card:#ffffff; --ink:#1c1d21; --muted:#6b6d76; --faint:#9a9ca4;
@@ -277,24 +281,27 @@ async function loadModel(){
   const lists = [...listDirs].map(dir=>{
     const name = dir==="" ? "Входящие" : dir.split("/").pop();
     const order = parseStringArray(orderTexts[dir]||"", "order");
-    const tasks = [];
+    const all = [];
     for(const f of files){
       if(f.dir!==dir || f.name.startsWith("_")) continue;
       const p = parseTaskFilename(f.name);
-      if(!p || p.parents.length>0) continue;   // v1: только верхний уровень списка
-      tasks.push({ ...p, path:f.path, sha:f.sha });
+      if(!p) continue;
+      all.push({ ...p, path:f.path, sha:f.sha, children:[] });
     }
-    // Сортировка по order (хэш), незнакомые — в хвост, выполненные — вниз.
-    tasks.sort((a,b)=>{
-      if(a.done!==b.done) return a.done?1:-1;
-      const ia=order.indexOf(a.hash), ib=order.indexOf(b.hash);
-      return (ia<0?1e9:ia)-(ib<0?1e9:ib);
-    });
-    return { name, dir, order, tasks };
+    // Дерево: задача-ребёнок ссылается на родителя последним хэшем в parents.
+    const byHash = {};
+    for(const t of all) byHash[t.hash] = t;
+    const roots = [];
+    for(const t of all){
+      const par = t.parents.length ? byHash[t.parents[t.parents.length-1]] : null;
+      if(par) par.children.push(t); else roots.push(t);
+    }
+    return { name, dir, order, roots, all };
   }).sort((a,b)=> a.dir==="" ? -1 : b.dir==="" ? 1 : a.name.localeCompare(b.name));
 
   model = { lists, curList:0 };
   render();
+  enrichList(model.lists[model.curList]);   // подтянуть срок/приоритет/флаг
 }
 function dirOf(path){ const i=path.lastIndexOf("/"); return i<0?"":path.slice(0,i); }
 
@@ -303,36 +310,40 @@ function dirOf(path){ const i=path.lastIndexOf("/"); return i<0?"":path.slice(0,
 // ===========================================================================
 function showSpinner(){ $("#list-body").innerHTML=""; const s=el("div","spinner","Загрузка…"); $("#list-body").appendChild(s); }
 
+// Сортировка уровня: выполненные вниз, затем по order (хэш), незнакомые — в хвост.
+function sortLevel(arr, order){
+  const oi = h => { const i=order.indexOf(h); return i<0?1e9:i; };
+  arr.sort((a,b)=> (a.done-b.done) || (oi(a.hash)-oi(b.hash)));
+}
+
 function render(){
   const L = model.lists[model.curList];
   $("#app-title").textContent = L.name;
-  const active = L.tasks.filter(t=>!t.done), done = L.tasks.filter(t=>t.done);
-  $("#app-count").textContent = active.length;
+  $("#app-count").textContent = L.all.filter(t=>!t.done).length;
 
   // Чипы списков
   const chips = $("#lists"); chips.innerHTML="";
   model.lists.forEach((l,idx)=>{
     const c = el("button","chip"+(idx===model.curList?" active":""), l.name);
-    c.onclick = ()=>{ model.curList=idx; render(); };
+    c.onclick = ()=>{ model.curList=idx; render(); enrichList(l); };
     chips.appendChild(c);
   });
 
   const body = $("#list-body"); body.innerHTML="";
-  if(L.tasks.length===0){ body.appendChild(el("div","empty","Нет задач")); return; }
+  if(L.all.length===0){ body.appendChild(el("div","empty","Нет задач")); return; }
   const ul = el("ul","tasks");
-  active.forEach(t=>ul.appendChild(taskRow(t)));
+  const walk = (nodes, depth)=>{
+    sortLevel(nodes, L.order);
+    for(const t of nodes){ ul.appendChild(taskRow(t, depth)); walk(t.children, depth+1); }
+  };
+  walk(L.roots, 0);
   body.appendChild(ul);
-  if(done.length){
-    body.appendChild(el("div","sec","Выполнено"));
-    const ud = el("ul","tasks");
-    done.forEach(t=>ud.appendChild(taskRow(t)));
-    body.appendChild(ud);
-  }
 }
 
-function taskRow(t){
+function taskRow(t, depth){
   const li = el("li","task"+(t.done?" done":""));
-  const box = el("button","box"); box.onclick=()=>toggleDone(t);
+  li.style.paddingLeft = (4 + depth*22) + "px";
+  const box = el("button","box"); box.onclick=(e)=>{ e.stopPropagation(); toggleDone(t); };
   const wrap = el("div","t");
   wrap.appendChild(el("div","name", t.title));
   if(t.meta){
@@ -344,6 +355,28 @@ function taskRow(t){
   }
   li.appendChild(box); li.appendChild(wrap);
   return li;
+}
+
+// Ленивая подгрузка полей задач (срок/приоритет/флаг) для списка — чанками,
+// с прогрессивным ре-рендером. Тексты TOML в demo лежат в mock.
+let enrichBusy = false;
+async function enrichList(L){
+  if(L._enriched || enrichBusy) return;
+  L._enriched = true; enrichBusy = true;
+  try{
+    const todo = L.all.filter(t=>!t.meta);
+    for(let i=0;i<todo.length;i+=8){
+      const chunk = todo.slice(i,i+8);
+      await Promise.all(chunk.map(async t=>{
+        try{
+          const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"")
+                            : (await ghGet(t.path)).text;
+          t.meta = parseTaskToml(text);
+        }catch(e){ t.meta = { due:null, priority:0, flagged:false }; }
+      }));
+      if(model.lists[model.curList]===L) render();   // прогрессивно
+    }
+  } finally { enrichBusy = false; }
 }
 
 // ===========================================================================
@@ -372,17 +405,21 @@ async function addTask(title){
   title = sanitizeTitle(title);
   if(!title) return;
   const L = model.lists[model.curList];
-  const existing = new Set(L.tasks.map(t=>t.hash));
+  const existing = new Set(L.all.map(t=>t.hash));
   const hash = newHash(existing);
   const fname = `${hash}_${title}.toml`;
   const path = (L.dir? L.dir+"/":"") + fname;
-  const task = { done:false, parents:[], hash, title, path };
-  L.tasks.unshift(task); render();   // оптимистично
+  const task = { done:false, parents:[], hash, title, path, children:[],
+                 meta:{ due:null, priority:0, flagged:false } };
+  L.all.push(task); L.roots.unshift(task); render();   // оптимистично
   try{
     if(demo){ mock.files.push({ path, text:"" }); }
     else { await ghPut(path, "", null, "Add: "+title); }
     toast("Добавлено");
-  }catch(e){ const i=L.tasks.indexOf(task); if(i>=0)L.tasks.splice(i,1); render(); toast("Ошибка: "+e.message); }
+  }catch(e){
+    L.all=L.all.filter(x=>x!==task); L.roots=L.roots.filter(x=>x!==task);
+    render(); toast("Ошибка: "+e.message);
+  }
 }
 
 // ===========================================================================
@@ -422,7 +459,10 @@ function startDemo(){
   demo=true; cfg={ repo:"demo/demo", branch:"main" };
   mock = { files:[
     { path:"_list.toml", text:'order = ["a10001","a10002","a10003"]\n' },
-    { path:"a10001_Купить хлеб.toml", text:"priority = 2\nflagged = true\n" },
+    { path:"a10001_Купить продукты.toml", text:"priority = 2\nflagged = true\n" },
+    { path:"a10001_c30001_Хлеб.toml", text:"" },
+    { path:"a10001_c30002_Молоко.toml", text:"priority = 1\n" },
+    { path:"~a10001_c30003_Яйца.toml", text:"" },
     { path:"a10002_Позвонить врачу.toml", text:'due = 2026-07-25\n' },
     { path:"~a10003_Оплатить счёт.toml", text:"" },
     { path:"Работа/_list.toml", text:'order = ["b20001","b20002"]\n' },
