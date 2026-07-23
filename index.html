@@ -101,6 +101,29 @@
     font-size:22px; flex:0 0 auto; }
   .addbar button:disabled{ opacity:.4; }
 
+  /* Лист задачи */
+  .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.35); opacity:0; pointer-events:none;
+    transition:.2s; z-index:30; }
+  .overlay.show{ opacity:1; pointer-events:auto; }
+  .sheet{ position:fixed; left:0; right:0; bottom:0; background:var(--card);
+    border-radius:20px 20px 0 0; padding:8px var(--pad) calc(var(--safe-bot) + 20px);
+    transform:translateY(110%); transition:transform .25s cubic-bezier(.2,.8,.2,1);
+    z-index:31; max-width:640px; margin:0 auto; box-shadow:0 -8px 40px rgba(0,0,0,.22); }
+  .sheet.show{ transform:translateY(0); }
+  .sheet .grab{ width:38px;height:4px;border-radius:2px;background:var(--sep);margin:6px auto 14px; }
+  .sheet .title-in{ width:100%; font-size:20px; font-weight:600; border:none; background:none;
+    outline:none; color:var(--ink); padding:2px 0 12px; border-bottom:1px solid var(--sep); margin-bottom:6px; }
+  .row{ display:flex; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--sep); }
+  .row .lbl{ flex:1; color:var(--muted); }
+  .row input[type=date]{ background:var(--bg); border:1px solid var(--sep); border-radius:9px;
+    padding:7px 10px; color:var(--ink); outline:none; }
+  .seg{ display:flex; gap:6px; }
+  .seg button{ padding:7px 12px; border-radius:9px; background:var(--bg); border:1px solid var(--sep);
+    font-size:14px; min-width:38px; }
+  .seg button.on{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .del{ width:100%; padding:13px; color:var(--danger); font-weight:600; margin-top:18px;
+    border:1px solid var(--sep); border-radius:12px; }
+
   .toast{ position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
     background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:999px; font-size:14px;
     opacity:0; transition:.2s; pointer-events:none; z-index:20; max-width:90%; }
@@ -149,6 +172,28 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Экран задачи (лист снизу) -->
+<div class="overlay" id="overlay"></div>
+<div class="sheet" id="sheet">
+  <div class="grab"></div>
+  <input class="title-in" id="d-title" placeholder="Название">
+  <div class="row"><div class="lbl">Приоритет</div>
+    <div class="seg" id="d-prio">
+      <button data-v="0">—</button><button data-v="1">!</button>
+      <button data-v="2">!!</button><button data-v="3">!!!</button>
+    </div></div>
+  <div class="row"><div class="lbl">Флажок</div>
+    <div class="seg"><button id="d-flag">⚑</button></div></div>
+  <div class="row"><div class="lbl">Срок</div>
+    <div class="seg" id="d-due">
+      <button data-d="0">Сегодня</button><button data-d="1">Завтра</button>
+      <button data-d="-1">Убрать</button>
+    </div></div>
+  <div class="row"><div class="lbl">Дата</div>
+    <input type="date" id="d-date"></div>
+  <button class="del" id="d-del">Удалить в корзину</button>
+</div>
 
 <script>
 "use strict";
@@ -343,6 +388,7 @@ function render(){
 function taskRow(t, depth){
   const li = el("li","task"+(t.done?" done":""));
   li.style.paddingLeft = (4 + depth*22) + "px";
+  li.onclick = ()=> openDetail(t);
   const box = el("button","box"); box.onclick=(e)=>{ e.stopPropagation(); toggleDone(t); };
   const wrap = el("div","t");
   wrap.appendChild(el("div","name", t.title));
@@ -423,6 +469,97 @@ async function addTask(title){
 }
 
 // ===========================================================================
+// Экран задачи: правка полей TOML (срок/приоритет/флаг), переименование, удаление
+// ===========================================================================
+let detailTask = null;
+const dateStr = (offset) => { const d=new Date(); d.setDate(d.getDate()+offset);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+
+// Построчный редактор TOML: правит известный ключ, чужие строки/комментарии
+// сохраняет (совместимо с toml.c). value=null удаляет ключ.
+function tomlSet(text, key, value){
+  const lines = (text||"").split(/\r?\n/);
+  const re = new RegExp("^\\s*"+key+"\\s*=");
+  const out = []; let handled = false;
+  for(const line of lines){
+    if(!handled && re.test(line)){ handled=true; if(value!=null) out.push(key+" = "+value); }
+    else out.push(line);
+  }
+  if(!handled && value!=null){
+    let i = out.findIndex(l=>/^\s*\[/.test(l));           // перед [[comment]] и т.п.
+    if(i<0){ while(out.length && out[out.length-1].trim()==="") out.pop(); i=out.length; }
+    out.splice(i,0,key+" = "+value);
+  }
+  let s = out.join("\n").replace(/\n{3,}/g,"\n\n");
+  if(s && !s.endsWith("\n")) s += "\n";
+  return s;
+}
+
+async function openDetail(t){
+  detailTask = t;
+  $("#overlay").classList.add("show"); $("#sheet").classList.add("show");
+  if(!t.meta){                        // подтянуть текущие поля, если ещё не загружены
+    try{
+      const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"") : (await ghGet(t.path)).text;
+      t.meta = parseTaskToml(text);
+    }catch(e){ t.meta = { due:null, priority:0, flagged:false }; }
+  }
+  if(detailTask===t) renderDetail();
+}
+function closeDetail(){ detailTask=null; $("#overlay").classList.remove("show"); $("#sheet").classList.remove("show"); }
+function renderDetail(){
+  const t = detailTask; if(!t) return;
+  $("#d-title").value = t.title;
+  const m = t.meta || {};
+  [...$("#d-prio").children].forEach(b=> b.classList.toggle("on", (m.priority||0)===+b.dataset.v));
+  $("#d-flag").classList.toggle("on", !!m.flagged);
+  $("#d-date").value = m.due || "";
+}
+
+async function writeToml(t, key, value){
+  try{
+    if(demo){ const f=mock.files.find(f=>f.path===t.path); if(f) f.text = tomlSet(f.text, key, value); }
+    else { const cur = await ghGet(t.path); await ghPut(t.path, tomlSet(cur.text,key,value), cur.sha, "Edit: "+t.title); }
+  }catch(e){ toast("Ошибка: "+e.message); }
+}
+function setPriority(v){ const t=detailTask; if(!t)return; t.meta.priority=v; renderDetail(); render(); writeToml(t,"priority", v?String(v):null); }
+function setFlag(){ const t=detailTask; if(!t)return; t.meta.flagged=!t.meta.flagged; renderDetail(); render(); writeToml(t,"flagged", t.meta.flagged?"true":null); }
+function setDue(v){ const t=detailTask; if(!t)return; t.meta.due=v||null; renderDetail(); render(); writeToml(t,"due", v||null); }
+
+async function renameTask(newTitle){
+  const t=detailTask; if(!t) return;
+  newTitle = sanitizeTitle(newTitle);
+  if(!newTitle || newTitle===t.title){ if(t) $("#d-title").value=t.title; return; }
+  const dir = dirOf(t.path), base = dir?dir+"/":"";
+  const prefix = (t.done?"~":"") + [...t.parents, t.hash].join("_") + "_";
+  const oldPath = t.path, newPath = base + prefix + newTitle + ".toml";
+  t.title = newTitle; t.path = newPath; render();
+  try{
+    if(demo){ const f=mock.files.find(f=>f.path===oldPath); if(f) f.path=newPath; }
+    else { const cur=await ghGet(oldPath); await ghPut(newPath,cur.text,null,"Rename: "+newTitle); await ghDel(oldPath,cur.sha,"rename"); }
+  }catch(e){ toast("Ошибка: "+e.message); }
+}
+
+async function deleteTask(){
+  const t=detailTask; if(!t) return;
+  const L = model.lists[model.curList];
+  const subtree=[]; (function collect(n){ subtree.push(n); n.children.forEach(collect); })(t);
+  const rm = new Set(subtree);
+  L.all = L.all.filter(x=>!rm.has(x));
+  L.roots = L.roots.filter(x=>!rm.has(x));
+  for(const x of L.all) x.children = x.children.filter(c=>!rm.has(c));
+  closeDetail(); render();
+  try{
+    for(const n of subtree){
+      const trashPath = "trash/"+n.path.split("/").pop();
+      if(demo){ const f=mock.files.find(f=>f.path===n.path); if(f) f.path=trashPath; }
+      else { const cur=await ghGet(n.path); await ghPut(trashPath,cur.text,null,"Trash: "+n.title); await ghDel(n.path,cur.sha,"trash"); }
+    }
+    toast("В корзину");
+  }catch(e){ toast("Ошибка: "+e.message); }
+}
+
+// ===========================================================================
 // Подключение / demo / роутинг
 // ===========================================================================
 function showApp(){
@@ -483,6 +620,17 @@ const addIn = $("#add-input"), addBtn = $("#add-btn");
 addIn.addEventListener("input", ()=> addBtn.disabled = !addIn.value.trim());
 addBtn.onclick = ()=>{ const v=addIn.value; addIn.value=""; addBtn.disabled=true; addTask(v); };
 addIn.addEventListener("keydown", e=>{ if(e.key==="Enter" && addIn.value.trim()){ const v=addIn.value; addIn.value=""; addBtn.disabled=true; addTask(v); } });
+
+// Лист задачи
+$("#overlay").onclick = closeDetail;
+$("#d-prio").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) setPriority(+b.dataset.v); });
+$("#d-flag").onclick = setFlag;
+$("#d-due").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b)return;
+  const d=+b.dataset.d; setDue(d<0?null:dateStr(d)); });
+$("#d-date").addEventListener("change", e=> setDue(e.target.value||null));
+$("#d-del").onclick = deleteTask;
+$("#d-title").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.target.blur(); } });
+$("#d-title").addEventListener("blur", e=> renameTask(e.target.value));
 
 // Автовосстановление сессии
 (function init(){
