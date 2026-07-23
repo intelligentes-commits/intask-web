@@ -86,6 +86,7 @@
   li.task .meta{ font-size:12px; color:var(--faint); margin-top:2px; display:flex; gap:10px; }
   li.task .meta .flag{ color:var(--accent); }
   li.task .meta .prio{ color:var(--danger); font-weight:700; }
+  li.task .name .srclist{ color:var(--faint); font-weight:400; font-size:13px; }
   .sec{ padding:18px var(--pad) 4px; font-size:12px; font-weight:700; letter-spacing:0.06em;
     color:var(--faint); text-transform:uppercase; }
   .empty{ text-align:center; color:var(--faint); padding:60px var(--pad); }
@@ -344,9 +345,10 @@ async function loadModel(){
     return { name, dir, order, roots, all };
   }).sort((a,b)=> a.dir==="" ? -1 : b.dir==="" ? 1 : a.name.localeCompare(b.name));
 
-  model = { lists, curList:0 };
+  const inbox = lists.findIndex(l=>l.dir==="");
+  model = { lists, cur:{ list: inbox<0?0:inbox } };
   render();
-  enrichList(model.lists[model.curList]);   // подтянуть срок/приоритет/флаг
+  enrichAll();   // подтянуть метаданные всех списков (для умных списков)
 }
 function dirOf(path){ const i=path.lastIndexOf("/"); return i<0?"":path.slice(0,i); }
 
@@ -361,22 +363,51 @@ function sortLevel(arr, order){
   arr.sort((a,b)=> (a.done-b.done) || (oi(a.hash)-oi(b.hash)));
 }
 
-function render(){
-  const L = model.lists[model.curList];
-  $("#app-title").textContent = L.name;
-  $("#app-count").textContent = L.all.filter(t=>!t.done).length;
+const SMARTS = [["today","Сегодня"],["tomorrow","Завтра"],["flag","Флажки"],["all","Все"]];
+function listOf(t){ return model.lists.find(L=>L.all.includes(t)); }
+function computeSmart(key){
+  const today=dateStr(0), tom=dateStr(1); const res=[];
+  for(const L of model.lists) for(const t of L.all){
+    const m=t.meta||{};
+    if(key!=="all" && t.done) continue;
+    if(key==="today"){ if(m.due && m.due<=today) res.push(t); }
+    else if(key==="tomorrow"){ if(m.due===tom) res.push(t); }
+    else if(key==="flag"){ if(m.flagged) res.push(t); }
+    else res.push(t);
+  }
+  res.sort((a,b)=> (a.done-b.done) || ((a.meta&&a.meta.due||"~").localeCompare(b.meta&&b.meta.due||"~")));
+  return res;
+}
 
-  // Чипы списков
+function render(){
+  const cur = model.cur;
   const chips = $("#lists"); chips.innerHTML="";
-  model.lists.forEach((l,idx)=>{
-    const c = el("button","chip"+(idx===model.curList?" active":""), l.name);
-    c.onclick = ()=>{ model.curList=idx; render(); enrichList(l); };
-    chips.appendChild(c);
-  });
+  SMARTS.forEach(([k,name])=>{ const c=el("button","chip"+(cur.smart===k?" active":""),name);
+    c.onclick=()=>{ model.cur={smart:k}; render(); }; chips.appendChild(c); });
+  model.lists.forEach((l,idx)=>{ const c=el("button","chip"+(cur.list===idx?" active":""), l.name);
+    c.onclick=()=>{ model.cur={list:idx}; render(); enrichList(l); }; chips.appendChild(c); });
 
   const body = $("#list-body"); body.innerHTML="";
-  if(L.all.length===0){ body.appendChild(el("div","empty","Нет задач")); return; }
   const ul = el("ul","tasks");
+
+  if(cur.smart){
+    $("#app-title").textContent = SMARTS.find(s=>s[0]===cur.smart)[1];
+    const tasks = computeSmart(cur.smart);
+    $("#app-count").textContent = tasks.filter(t=>!t.done).length;
+    if(!tasks.length){ body.appendChild(el("div","empty","Нет задач")); return; }
+    for(const t of tasks){
+      const li = taskRow(t, 0);
+      const L = listOf(t);
+      if(L && L.dir!=="") li.querySelector(".name").appendChild(el("span","srclist"," · "+L.name));
+      ul.appendChild(li);
+    }
+    body.appendChild(ul); return;
+  }
+
+  const L = model.lists[cur.list];
+  $("#app-title").textContent = L.name;
+  $("#app-count").textContent = L.all.filter(t=>!t.done).length;
+  if(L.all.length===0){ body.appendChild(el("div","empty","Нет задач")); return; }
   const walk = (nodes, depth)=>{
     sortLevel(nodes, L.order);
     for(const t of nodes){ ul.appendChild(taskRow(t, depth)); walk(t.children, depth+1); }
@@ -405,31 +436,28 @@ function taskRow(t, depth){
 
 // Ленивая подгрузка полей задач (срок/приоритет/флаг) для списка — чанками,
 // с прогрессивным ре-рендером. Тексты TOML в demo лежат в mock.
-let enrichBusy = false;
 async function enrichList(L){
-  if(L._enriched || enrichBusy) return;
-  L._enriched = true; enrichBusy = true;
-  try{
-    const todo = L.all.filter(t=>!t.meta);
-    for(let i=0;i<todo.length;i+=8){
-      const chunk = todo.slice(i,i+8);
-      await Promise.all(chunk.map(async t=>{
-        try{
-          const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"")
-                            : (await ghGet(t.path)).text;
-          t.meta = parseTaskToml(text);
-        }catch(e){ t.meta = { due:null, priority:0, flagged:false }; }
-      }));
-      if(model.lists[model.curList]===L) render();   // прогрессивно
-    }
-  } finally { enrichBusy = false; }
+  if(L._enriched) return;
+  L._enriched = true;
+  const todo = L.all.filter(t=>!t.meta);
+  for(let i=0;i<todo.length;i+=8){
+    const chunk = todo.slice(i,i+8);
+    await Promise.all(chunk.map(async t=>{
+      try{
+        const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"")
+                          : (await ghGet(t.path)).text;
+        t.meta = parseTaskToml(text);
+      }catch(e){ t.meta = { due:null, priority:0, flagged:false }; }
+    }));
+    render();   // прогрессивно (в т.ч. умные списки наполняются по мере загрузки)
+  }
 }
+async function enrichAll(){ for(const L of model.lists) await enrichList(L); }
 
 // ===========================================================================
 // Действия: выполнить/снять (переименование ~) и добавить задачу
 // ===========================================================================
 async function toggleDone(t){
-  const L = model.lists[model.curList];
   const base = t.path.slice(0, t.path.length - (t.path.split("/").pop().length)); // dir + "/"
   const oldName = t.path.split("/").pop();
   const newName = t.done ? oldName.replace(/^~/,"") : "~"+oldName;
@@ -450,7 +478,9 @@ async function toggleDone(t){
 async function addTask(title){
   title = sanitizeTitle(title);
   if(!title) return;
-  const L = model.lists[model.curList];
+  // В умном списке добавляем во «Входящие»; иначе — в текущий список.
+  const L = model.cur.list!=null ? model.lists[model.cur.list]
+                                 : (model.lists.find(x=>x.dir==="") || model.lists[0]);
   const existing = new Set(L.all.map(t=>t.hash));
   const hash = newHash(existing);
   const fname = `${hash}_${title}.toml`;
@@ -542,7 +572,7 @@ async function renameTask(newTitle){
 
 async function deleteTask(){
   const t=detailTask; if(!t) return;
-  const L = model.lists[model.curList];
+  const L = listOf(t) || model.lists[0];
   const subtree=[]; (function collect(n){ subtree.push(n); n.children.forEach(collect); })(t);
   const rm = new Set(subtree);
   L.all = L.all.filter(x=>!rm.has(x));
