@@ -71,8 +71,15 @@
   .chip.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
 
   ul.tasks{ list-style:none; margin:0; padding:6px var(--pad) 0; }
-  li.task{ display:flex; align-items:center; gap:6px; padding:8px 4px;
-    border-bottom:1px solid var(--sep); }
+  li.task{ position:relative; overflow:hidden; border-bottom:1px solid var(--sep); }
+  li.task .rowmain{ position:relative; z-index:1; background:var(--bg); display:flex;
+    align-items:center; gap:6px; padding:8px 4px; touch-action:pan-y; }
+  li.task .swipe-bg{ position:absolute; top:0; bottom:0; left:0; right:0; display:flex;
+    align-items:center; color:#fff; font-weight:600; font-size:14px; padding:0 20px; opacity:0; }
+  li.task .swipe-bg.done{ justify-content:flex-start; background:var(--accent); }
+  li.task .swipe-bg.trash{ justify-content:flex-end; background:var(--danger); }
+  li.task.sw-r .swipe-bg.done{ opacity:1; }
+  li.task.sw-l .swipe-bg.trash{ opacity:1; }
   /* 40px тап-цель, кружок 22px внутри (комфортно для пальца) */
   li.task .box{ flex:0 0 auto; width:40px;height:40px; display:flex; align-items:center;
     justify-content:center; position:relative; }
@@ -109,7 +116,8 @@
   .sheet{ position:fixed; left:0; right:0; bottom:0; background:var(--card);
     border-radius:20px 20px 0 0; padding:8px var(--pad) calc(var(--safe-bot) + 20px);
     transform:translateY(110%); transition:transform .25s cubic-bezier(.2,.8,.2,1);
-    z-index:31; max-width:640px; margin:0 auto; box-shadow:0 -8px 40px rgba(0,0,0,.22); }
+    z-index:31; max-width:640px; margin:0 auto; box-shadow:0 -8px 40px rgba(0,0,0,.22);
+    max-height:88vh; overflow-y:auto; }
   .sheet.show{ transform:translateY(0); }
   .sheet .grab{ width:38px;height:4px;border-radius:2px;background:var(--sep);margin:6px auto 14px; }
   .sheet .title-in{ width:100%; font-size:20px; font-weight:600; border:none; background:none;
@@ -124,6 +132,23 @@
   .seg button.on{ background:var(--accent); color:#fff; border-color:var(--accent); }
   .del{ width:100%; padding:13px; color:var(--danger); font-weight:600; margin-top:18px;
     border:1px solid var(--sep); border-radius:12px; }
+  .listrow{ padding:12px 0; border-bottom:1px solid var(--sep); }
+  .listrow .lbl{ color:var(--muted); margin-bottom:8px; }
+  .listpick{ overflow-x:auto; scrollbar-width:none; padding-bottom:2px; }
+  .listpick::-webkit-scrollbar{ display:none; }
+  .listpick button{ white-space:nowrap; }
+  .addsub{ width:100%; padding:11px; color:var(--accent); font-weight:600; margin-top:14px;
+    border:1px dashed var(--sep); border-radius:12px; }
+  .csec{ font-size:12px; font-weight:700; letter-spacing:.06em; color:var(--faint);
+    text-transform:uppercase; margin:20px 0 6px; }
+  .comments .comment{ padding:8px 0; border-bottom:1px solid var(--sep); }
+  .comments .ctext{ white-space:pre-wrap; word-break:break-word; }
+  .comments .cdate{ font-size:12px; color:var(--faint); margin-top:2px; }
+  .addcomment{ display:flex; gap:8px; margin-top:8px; }
+  .addcomment input{ flex:1; padding:10px 12px; background:var(--bg); border:1px solid var(--sep);
+    border-radius:999px; outline:none; color:var(--ink); }
+  .addcomment button{ width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;
+    font-size:20px; flex:0 0 auto; }
 
   .toast{ position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
     background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:999px; font-size:14px;
@@ -193,6 +218,15 @@
     </div></div>
   <div class="row"><div class="lbl">Дата</div>
     <input type="date" id="d-date"></div>
+  <div class="listrow" id="d-listrow"><div class="lbl">Список</div>
+    <div class="seg listpick" id="d-listpick"></div></div>
+  <button class="addsub" id="d-addsub">＋ Подзадача</button>
+  <div class="csec">Комментарии</div>
+  <div class="comments" id="d-comments"></div>
+  <div class="addcomment">
+    <input id="d-cin" placeholder="Комментарий…" enterkeyhint="send">
+    <button id="d-cadd">＋</button>
+  </div>
   <button class="del" id="d-del">Удалить в корзину</button>
 </div>
 
@@ -418,8 +452,11 @@ function render(){
 
 function taskRow(t, depth){
   const li = el("li","task"+(t.done?" done":""));
-  li.style.paddingLeft = (4 + depth*22) + "px";
-  li.onclick = ()=> openDetail(t);
+  // Фоновые действия свайпа (за строкой).
+  const bgL = el("div","swipe-bg done", t.done?"↩ Вернуть":"✓ Готово");
+  const bgR = el("div","swipe-bg trash","Корзина");
+  const main = el("div","rowmain");
+  main.style.paddingLeft = (4 + depth*22) + "px";
   const box = el("button","box"); box.onclick=(e)=>{ e.stopPropagation(); toggleDone(t); };
   const wrap = el("div","t");
   wrap.appendChild(el("div","name", t.title));
@@ -430,8 +467,40 @@ function taskRow(t, depth){
     if(t.meta.due) m.appendChild(el("span","due", t.meta.due));
     if(m.children.length) wrap.appendChild(m);
   }
-  li.appendChild(box); li.appendChild(wrap);
+  main.appendChild(box); main.appendChild(wrap);
+  li.appendChild(bgL); li.appendChild(bgR); li.appendChild(main);
+  attachSwipe(li, main, t);
   return li;
+}
+
+// Свайп по строке: вправо — выполнить/вернуть, влево — в корзину. Тап без
+// движения — экран задачи. Работает через Pointer Events (тач и мышь).
+function attachSwipe(li, main, t){
+  let sx=0, dx=0, active=false, moved=false;
+  const w = ()=> li.offsetWidth || 320;
+  li.addEventListener('pointerdown', e=>{
+    if(e.target.closest('.box')) return;
+    sx=e.clientX; dx=0; active=true; moved=false; main.style.transition='none';
+    try{ li.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  li.addEventListener('pointermove', e=>{
+    if(!active) return;
+    dx=e.clientX-sx; if(Math.abs(dx)>8) moved=true;
+    const d=Math.max(-w(), Math.min(w(), dx));
+    main.style.transform='translateX('+d+'px)';
+    li.classList.toggle('sw-l', dx<-8); li.classList.toggle('sw-r', dx>8);
+  });
+  const finish=()=>{
+    if(!active) return; active=false; main.style.transition='transform .2s';
+    const th=w()*0.32;
+    if(dx < -th){ main.style.transform='translateX(-100%)'; setTimeout(()=>trashTask(t),160); }
+    else if(dx > th){ main.style.transform=''; toggleDone(t); }
+    else if(!moved){ main.style.transform=''; openDetail(t); }
+    else { main.style.transform=''; }
+    li.classList.remove('sw-l','sw-r'); dx=0;
+  };
+  li.addEventListener('pointerup', finish);
+  li.addEventListener('pointercancel', ()=>{ active=false; main.style.transition='transform .2s'; main.style.transform=''; li.classList.remove('sw-l','sw-r'); dx=0; });
 }
 
 // Ленивая подгрузка полей задач (срок/приоритет/флаг) для списка — чанками,
@@ -525,18 +594,29 @@ function tomlSet(text, key, value){
   return s;
 }
 
+let detailText = "";   // полный TOML открытой задачи (для комментариев/записи)
+
 async function openDetail(t){
-  detailTask = t;
+  detailTask = t; detailText = "";
   $("#overlay").classList.add("show"); $("#sheet").classList.add("show");
-  if(!t.meta){                        // подтянуть текущие поля, если ещё не загружены
-    try{
-      const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"") : (await ghGet(t.path)).text;
-      t.meta = parseTaskToml(text);
-    }catch(e){ t.meta = { due:null, priority:0, flagged:false }; }
-  }
-  if(detailTask===t) renderDetail();
+  renderDetail();
+  try{
+    const text = demo ? (mock.files.find(f=>f.path===t.path)?.text||"") : (await ghGet(t.path)).text;
+    if(detailTask!==t) return;
+    detailText = text; t.meta = parseTaskToml(text); renderDetail();
+  }catch(e){ if(!t.meta) t.meta={due:null,priority:0,flagged:false}; renderDetail(); }
 }
 function closeDetail(){ detailTask=null; $("#overlay").classList.remove("show"); $("#sheet").classList.remove("show"); }
+
+function parseComments(text){
+  const res=[]; if(!text) return res;
+  for(const b of text.split("[[comment]]").slice(1)){
+    const cr=b.match(/created\s*=\s*([^\n]+)/), tx=b.match(/text\s*=\s*"([^"]*)"/);
+    res.push({ created: cr?cr[1].trim():"", text: tx?tx[1]:"" });
+  }
+  return res;
+}
+
 function renderDetail(){
   const t = detailTask; if(!t) return;
   $("#d-title").value = t.title;
@@ -544,9 +624,28 @@ function renderDetail(){
   [...$("#d-prio").children].forEach(b=> b.classList.toggle("on", (m.priority||0)===+b.dataset.v));
   $("#d-flag").classList.toggle("on", !!m.flagged);
   $("#d-date").value = m.due || "";
+  // Список (перенос) — только для задач верхнего уровня.
+  const lrow=$("#d-listrow"), lp=$("#d-listpick");
+  if(t.parents.length===0 && model.lists.length>1){
+    lrow.style.display=""; lp.innerHTML="";
+    const cur=listOf(t);
+    model.lists.forEach((L,idx)=>{ const c=el("button", L===cur?"on":"", L.name);
+      c.onclick=()=>moveTask(t, idx); lp.appendChild(c); });
+  } else lrow.style.display="none";
+  // Подзадача — если ≤3 уровня.
+  $("#d-addsub").style.display = t.parents.length<2 ? "" : "none";
+  // Комментарии.
+  const cbox=$("#d-comments"); cbox.innerHTML="";
+  for(const c of parseComments(detailText)){
+    const d=el("div","comment");
+    d.appendChild(el("div","ctext", c.text));
+    if(c.created) d.appendChild(el("div","cdate", c.created.replace("T"," ").slice(0,16)));
+    cbox.appendChild(d);
+  }
 }
 
 async function writeToml(t, key, value){
+  detailText = tomlSet(detailText, key, value);   // держим локальный текст в синхроне
   try{
     if(demo){ const f=mock.files.find(f=>f.path===t.path); if(f) f.text = tomlSet(f.text, key, value); }
     else { const cur = await ghGet(t.path); await ghPut(t.path, tomlSet(cur.text,key,value), cur.sha, "Edit: "+t.title); }
@@ -570,22 +669,70 @@ async function renameTask(newTitle){
   }catch(e){ toast("Ошибка: "+e.message); }
 }
 
-async function deleteTask(){
-  const t=detailTask; if(!t) return;
+const subtreeOf = t => { const a=[]; (function w(n){ a.push(n); n.children.forEach(w); })(t); return a; };
+
+async function trashTask(t){
   const L = listOf(t) || model.lists[0];
-  const subtree=[]; (function collect(n){ subtree.push(n); n.children.forEach(collect); })(t);
-  const rm = new Set(subtree);
+  const st = subtreeOf(t), rm = new Set(st);
   L.all = L.all.filter(x=>!rm.has(x));
   L.roots = L.roots.filter(x=>!rm.has(x));
   for(const x of L.all) x.children = x.children.filter(c=>!rm.has(c));
-  closeDetail(); render();
+  render();
   try{
-    for(const n of subtree){
+    for(const n of st){
       const trashPath = "trash/"+n.path.split("/").pop();
       if(demo){ const f=mock.files.find(f=>f.path===n.path); if(f) f.path=trashPath; }
       else { const cur=await ghGet(n.path); await ghPut(trashPath,cur.text,null,"Trash: "+n.title); await ghDel(n.path,cur.sha,"trash"); }
     }
     toast("В корзину");
+  }catch(e){ toast("Ошибка: "+e.message); }
+}
+function deleteTask(){ const t=detailTask; if(!t) return; closeDetail(); trashTask(t); }
+
+async function moveTask(t, targetIdx){
+  const src=listOf(t), dst=model.lists[targetIdx];
+  if(!src || !dst || src===dst || t.parents.length) return;
+  const st=subtreeOf(t), rm=new Set(st);
+  try{
+    for(const n of st){
+      const fname=n.path.split("/").pop(), newPath=(dst.dir?dst.dir+"/":"")+fname;
+      if(demo){ const f=mock.files.find(f=>f.path===n.path); if(f)f.path=newPath; n.path=newPath; }
+      else { const cur=await ghGet(n.path); await ghPut(newPath,cur.text,null,"Move: "+n.title); await ghDel(n.path,cur.sha,"move"); n.path=newPath; }
+    }
+    src.all=src.all.filter(x=>!rm.has(x)); src.roots=src.roots.filter(x=>!rm.has(x));
+    for(const n of st) dst.all.push(n);
+    dst.roots.unshift(t);
+    toast("В список «"+dst.name+"»"); renderDetail(); render();
+  }catch(e){ toast("Ошибка: "+e.message); }
+}
+
+async function addSubtask(title){
+  const parent=detailTask; if(!parent) return;
+  title=sanitizeTitle(title); if(!title) return;
+  if(parent.parents.length>=2){ toast("Глубже нельзя (макс. 3 уровня)"); return; }
+  const L=listOf(parent), dir=dirOf(parent.path), base=dir?dir+"/":"";
+  const hash=newHash(new Set(L.all.map(t=>t.hash)));
+  const parents=[...parent.parents, parent.hash];
+  const path=base+parents.join("_")+"_"+hash+"_"+title+".toml";
+  const task={ done:false, parents, hash, title, path, children:[], meta:{due:null,priority:0,flagged:false} };
+  parent.children.push(task); L.all.push(task); render();
+  try{
+    if(demo){ mock.files.push({path,text:""}); }
+    else { await ghPut(path,"",null,"Add subtask: "+title); }
+    toast("Подзадача добавлена");
+  }catch(e){ parent.children=parent.children.filter(x=>x!==task); L.all=L.all.filter(x=>x!==task); render(); toast("Ошибка: "+e.message); }
+}
+
+async function addComment(text){
+  const t=detailTask; if(!t) return;
+  text=text.trim().replace(/"/g,"'").slice(0,600); if(!text) return;
+  const n=new Date(), p=x=>String(x).padStart(2,"0");
+  const iso=n.getFullYear()+"-"+p(n.getMonth()+1)+"-"+p(n.getDate())+"T"+p(n.getHours())+":"+p(n.getMinutes())+":"+p(n.getSeconds());
+  const block="\n[[comment]]\ncreated = "+iso+"\ntext = \""+text+"\"\n";
+  try{
+    if(demo){ const f=mock.files.find(f=>f.path===t.path); const base=(f.text||""); f.text=(base&&!base.endsWith("\n")?base+"\n":base)+block; detailText=f.text; }
+    else { const cur=await ghGet(t.path); const base=(cur.text||""); const nt=(base&&!base.endsWith("\n")?base+"\n":base)+block; await ghPut(t.path, nt, cur.sha, "Comment: "+t.title); detailText=nt; }
+    renderDetail();
   }catch(e){ toast("Ошибка: "+e.message); }
 }
 
@@ -661,6 +808,9 @@ $("#d-date").addEventListener("change", e=> setDue(e.target.value||null));
 $("#d-del").onclick = deleteTask;
 $("#d-title").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.target.blur(); } });
 $("#d-title").addEventListener("blur", e=> renameTask(e.target.value));
+$("#d-addsub").onclick = ()=>{ const v=prompt("Подзадача:"); if(v && v.trim()) addSubtask(v); };
+$("#d-cadd").onclick = ()=>{ const v=$("#d-cin").value; if(v.trim()){ $("#d-cin").value=""; addComment(v); } };
+$("#d-cin").addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.value.trim()){ const v=e.target.value; e.target.value=""; addComment(v); } });
 
 // Автовосстановление сессии
 (function init(){
